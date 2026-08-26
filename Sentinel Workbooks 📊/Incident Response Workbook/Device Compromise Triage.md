@@ -36,7 +36,7 @@ Use it when a device surfaces in an alert, appears on the endpoint dashboard, or
 
 ---
 ## KQL
-```
+```kql
 // ============================================================
 // DEVICE COMPROMISE TRIAGE v1 - Workbook (Parameterized)
 // ============================================================
