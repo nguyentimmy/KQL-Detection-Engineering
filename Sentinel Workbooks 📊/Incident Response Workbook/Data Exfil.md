@@ -29,7 +29,7 @@ This covers eight channels in a single view so the pattern is visible rather tha
 
 ---
 ## KQL
-```
+```kql
 // ============================================================
 // DATA EXFILTRATION HUNT - Workbook (Parameterized)
 // ============================================================
