@@ -1,5 +1,5 @@
 
-# User Compromise Triage
+# 👤 User Compromise Triage
 
 **On-demand post-compromise investigation for a single account.**
 
