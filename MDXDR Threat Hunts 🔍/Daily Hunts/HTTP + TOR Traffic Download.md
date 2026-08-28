@@ -52,7 +52,7 @@ The exit-node list is pulled live from the Tor Project's official bulk list.
 
 ## 🔍 KQL
 
-```
+```kql
 // ============================================================
 // HTTP EXECUTABLE DOWNLOADS + TOR TRAFFIC (Cleartext Inspection)
 // ============================================================
