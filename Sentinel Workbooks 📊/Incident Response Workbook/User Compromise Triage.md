@@ -32,7 +32,7 @@ This unifies them into one timeline. Use it when a user is named in a phishing r
 
 ## KQL
 
-```
+```kql
 // ============================================================
 // USER COMPROMISE TRIAGE - Workbook (Parameterized)
 // ============================================================
