@@ -38,219 +38,344 @@ Use it when a device surfaces in an alert, appears on the endpoint dashboard, or
 ## KQL
 ```kql
 // ============================================================
-// DEVICE COMPROMISE TRIAGE v1 - Workbook (Parameterized)
+// DEVICE COMPROMISE TRIAGE v3.5 - Workbook (Parameterized)
 // ============================================================
 // MITRE ATT&CK:
-//   T1547 / T1543 - Persistence: autostart, scheduled tasks, services
-//   T1003.001     - Credential Access: LSASS memory
+//   T1059         - Execution: malicious PowerShell
+//   T1547 / T1543 - Persistence: autostart keys, scheduled tasks, services
+//   T1136 / T1098 / T1078 - Persistence/PrivEsc: account manipulation
+//   T1112         - Defense Evasion: registry modification
 //   T1562 / T1070 - Defense Evasion: impair defenses, indicator removal
-//   T1490         - Impact: inhibit system recovery
+//   T1003.001     - Credential Access: LSASS memory
 //   T1087 / T1069 / T1482 / T1558 - Discovery and Kerberos recon
 //   T1021         - Lateral Movement: remote services
-//   T1071 / T1572 - Command and Control: web protocols, tunneling
-//   T1219         - Remote Access Software
-// ============================================================
-// PARAMETERS: {DeviceName}, {TimeRange}
-// ============================================================
+//   T1071 / T1572 - C2: web protocols, tunneling
+//   T1219         - C2: remote access software
+//   T1490         - Impact: inhibit system recovery
 let TargetDevice = "{DeviceName}";
 let BenignParents = dynamic([
-    "qualysagent.exe", "msedge.exe", "msedgewebview2.exe",
+    "msedge.exe", "msedgewebview2.exe",
     "MicrosoftEdgeUpdate.exe", "IntuneManagementExtension.exe",
     "backgroundTaskHost.exe"
 ]);
 let HardSignalKeywords = dynamic([
-    "Credential Access", "Ransomware Prep", "Backdoor", "Defense Evasion"
+    "Credential Access", "Ransomware Prep", "Backdoor", "Defense Evasion",
+    "Account Manipulation", "Registry Modification", "Malicious PowerShell"
 ]);
 union isfuzzy=true
 // ============================================================
-// 1. PERSISTENCE - autostart keys, scheduled tasks, services
+// TA0002 EXECUTION -- T1059 malicious PowerShell (download/encode/hidden)
+// ============================================================
+(
+    DeviceProcessEvents
+    | where TimeGenerated {TimeRange}
+    | where isempty(TargetDevice) or DeviceName has TargetDevice
+    | where FileName in~ ("powershell.exe", "pwsh.exe")
+    | where ProcessCommandLine has_any (
+        "DownloadFile", "DownloadString", "DownloadData",
+        "Invoke-Expression", "IEX", "iex(",
+        "EncodedCommand", "-enc ", "-ec ",
+        "FromBase64String",
+        "Net.WebClient", "WebRequest", "Start-BitsTransfer",
+        "Invoke-WebRequest", "curl ", "wget ")
+        or (ProcessCommandLine has "-WindowStyle Hidden"
+            and ProcessCommandLine has "-ExecutionPolicy Bypass")
+        or (ProcessCommandLine has "-NonInteractive"
+            and ProcessCommandLine has "-NoProfile"
+            and ProcessCommandLine has_any ("http", "ftp", "\\\\"))
+    | project TimeGenerated, Signal = "⚡ Malicious PowerShell", DeviceName,
+              Account = AccountName,
+              InitiatingProcess = InitiatingProcessFileName,
+              InitiatingProcessCmd = InitiatingProcessCommandLine,
+              ChildProcess = FileName,
+              SHA256,
+              Detail = strcat("PS: ", substring(ProcessCommandLine, 0, 250))
+),
+// ============================================================
+// TA0003 PERSISTENCE -- T1547 autostart keys (registry-state source)
 // ============================================================
 (
     DeviceRegistryEvents
     | where TimeGenerated {TimeRange}
     | where isempty(TargetDevice) or DeviceName has TargetDevice
     | where ActionType in ("RegistryValueSet", "RegistryKeyCreated")
-    | where RegistryKey has_any ("CurrentVersion\\Run", "CurrentVersion\\RunOnce",
-        "Winlogon\\Shell", "Winlogon\\Userinit", "Policies\\Explorer\\Run")
+    | where RegistryKey has_any (
+        "CurrentVersion\\Run", "CurrentVersion\\RunOnce",
+        "Winlogon\\Shell", "Winlogon\\Userinit", "Policies\\Explorer\\Run",
+        "CurrentVersion\\RunServices", "CurrentVersion\\RunServicesOnce",
+        "BootExecute", "AppInit_DLLs", "Image File Execution Options")
     | project TimeGenerated, Signal = "🔧 Registry Persistence", DeviceName,
               Account = InitiatingProcessAccountName,
               InitiatingProcess = InitiatingProcessFileName,
               InitiatingProcessCmd = InitiatingProcessCommandLine,
               ChildProcess = "",
               SHA256 = InitiatingProcessSHA256,
-              Detail = strcat("Reg: ", RegistryValueName, " = ", substring(RegistryValueData, 0, 200))
+              Detail = strcat("Reg: ", RegistryValueName, " = ",
+                             substring(RegistryValueData, 0, 200))
 ),
+// ============================================================
+// TA0003 PERSISTENCE -- T1053.005 / T1543 scheduled tasks & services
+// ============================================================
 (
     DeviceProcessEvents
     | where TimeGenerated {TimeRange}
     | where isempty(TargetDevice) or DeviceName has TargetDevice
-    | extend CmdArgs = replace_regex(ProcessCommandLine, @'(?i)^\s*"?[^"]*?\.exe"?', "")
-    | where CmdArgs has_any ("schtasks /create", "New-ScheduledTask", "Register-ScheduledTask",
-        "sc create", "New-Service", "sc.exe create")
+    | where ProcessCommandLine has_any (
+        "schtasks /create", "/sc onlogon", "/sc onstart",
+        "/sc onstartup", "/ru system",
+        "New-ScheduledTask", "Register-ScheduledTask",
+        "sc create", "New-Service")
     | project TimeGenerated, Signal = "🔧 Task/Service Persistence", DeviceName,
               Account = AccountName,
               InitiatingProcess = InitiatingProcessFileName,
               InitiatingProcessCmd = InitiatingProcessCommandLine,
               ChildProcess = FileName,
               SHA256,
-              Detail = strcat("Task/Service: ", substring(CmdArgs, 0, 250))
+              Detail = strcat("Task/Svc: ", substring(ProcessCommandLine, 0, 250))
 ),
 // ============================================================
-// 2. CREDENTIAL ACCESS - LSASS dumping, credential tooling
+// TA0003/TA0004 PERSISTENCE/PRIVESC -- T1098 account manipulation
 // ============================================================
 (
     DeviceProcessEvents
     | where TimeGenerated {TimeRange}
     | where isempty(TargetDevice) or DeviceName has TargetDevice
-    | extend CmdArgs = replace_regex(ProcessCommandLine, @'(?i)^\s*"?[^"]*?\.exe"?', "")
-    | where CmdArgs has_any ("Mimikatz", "sekurlsa", "logonpasswords", "lsadump",
-        "procdump", "comsvcs.dll", "MiniDumpWriteDump", "nanodump",
-        "\\lsass", "lsass.dmp", "Out-Minidump", "pypykatz")
-        or (CmdArgs has "comsvcs" and CmdArgs has "lsass")
-    | project TimeGenerated, Signal = "🔑 Credential Access", DeviceName,
+    | where (ProcessCommandLine has "localgroup" and
+             ProcessCommandLine has_any ("/add", "/delete"))
+        or (ProcessCommandLine has "net user" and
+            ProcessCommandLine has_any ("/add", "/delete"))
+        or ProcessCommandLine has "/active:yes"
+        or ProcessCommandLine has "/active:no"
+        or ProcessCommandLine has_any (
+            "New-LocalUser", "Add-LocalGroupMember",
+            "Set-LocalUser", "Enable-LocalUser", "Disable-LocalUser",
+            "Remove-LocalGroupMember",
+            "net localgroup administrators",
+            "net localgroup \"remote desktop users\"")
+    | project TimeGenerated, Signal = "👤 Account Manipulation", DeviceName,
               Account = AccountName,
               InitiatingProcess = InitiatingProcessFileName,
               InitiatingProcessCmd = InitiatingProcessCommandLine,
               ChildProcess = FileName,
               SHA256,
-              Detail = strcat("Cred access: ", substring(CmdArgs, 0, 250))
+              Detail = strcat("Account: ", substring(ProcessCommandLine, 0, 250))
 ),
 // ============================================================
-// 3. DEFENSE EVASION - Defender tamper, log clearing, AMSI bypass
+// TA0005 DEFENSE EVASION -- T1112 persistence/RDP/AV registry mods (reg.exe)
 // ============================================================
 (
     DeviceProcessEvents
     | where TimeGenerated {TimeRange}
     | where isempty(TargetDevice) or DeviceName has TargetDevice
-    | extend CmdArgs = replace_regex(ProcessCommandLine, @'(?i)^\s*"?[^"]*?\.exe"?', "")
-    | where CmdArgs has_any (
-        "DisableRealtimeMonitoring", "DisableBehaviorMonitoring", "Add-MpPreference -ExclusionPath",
-        "wevtutil cl", "Clear-EventLog", "auditpol /clear", "fsutil usn deletejournal",
-        "TamperProtection", "AmsiScanBuffer", "amsiInitFailed")
+    | where FileName in~ ("reg.exe", "regedit.exe")
+        and ProcessCommandLine has_any ("add", "delete", "import")
+        and ProcessCommandLine has_any (
+            "CurrentVersion\\Run", "CurrentVersion\\RunOnce",
+            "Terminal Server", "fDenyTSConnections", "AllowTSConnections",
+            "DisableAntiSpyware", "DisableAntiVirus",
+            "Winlogon", "AppInit_DLLs", "Image File Execution Options",
+            "SecurityProviders", "Lsa", "DisabledComponents")
+    | project TimeGenerated, Signal = "📝 Registry Modification", DeviceName,
+              Account = AccountName,
+              InitiatingProcess = InitiatingProcessFileName,
+              InitiatingProcessCmd = InitiatingProcessCommandLine,
+              ChildProcess = FileName,
+              SHA256,
+              Detail = strcat("Reg mod: ", substring(ProcessCommandLine, 0, 250))
+),
+// ============================================================
+// TA0005 DEFENSE EVASION -- T1562/T1070 impair defenses, clear logs, AMSI
+// ============================================================
+(
+    DeviceProcessEvents
+    | where TimeGenerated {TimeRange}
+    | where isempty(TargetDevice) or DeviceName has TargetDevice
+    | where ProcessCommandLine has_any (
+        "DisableRealtimeMonitoring", "DisableBehaviorMonitoring",
+        "Set-MpPreference", "Add-MpPreference -ExclusionPath",
+        "DisableAntiSpyware", "DisableAntiVirus",
+        "wevtutil cl", "Clear-EventLog", "auditpol /clear",
+        "fsutil usn deletejournal", "TamperProtection",
+        "AmsiScanBuffer", "amsiInitFailed",
+        "Remove-MpPreference", "Set-MpPreference -Disable")
     | project TimeGenerated, Signal = "🥷 Defense Evasion", DeviceName,
               Account = AccountName,
               InitiatingProcess = InitiatingProcessFileName,
               InitiatingProcessCmd = InitiatingProcessCommandLine,
               ChildProcess = FileName,
               SHA256,
-              Detail = strcat("Evasion: ", substring(CmdArgs, 0, 250))
+              Detail = strcat("Evasion: ", substring(ProcessCommandLine, 0, 250))
 ),
 // ============================================================
-// 4. RANSOMWARE PREP - shadow copy / backup destruction
+// TA0006 CREDENTIAL ACCESS -- T1003.001 LSASS dumping / cred tooling
 // ============================================================
 (
     DeviceProcessEvents
     | where TimeGenerated {TimeRange}
     | where isempty(TargetDevice) or DeviceName has TargetDevice
-    | extend CmdArgs = replace_regex(ProcessCommandLine, @'(?i)^\s*"?[^"]*?\.exe"?', "")
-    | where CmdArgs has_any ("vssadmin delete shadows", "wmic shadowcopy delete",
-        "Win32_ShadowCopy", "bcdedit /set recoveryenabled no", "wbadmin delete catalog",
-        "vssadmin resize shadowstorage")
-    | project TimeGenerated, Signal = "💥 Ransomware Prep", DeviceName,
+    | where ProcessCommandLine has_any (
+        "Mimikatz", "sekurlsa", "logonpasswords", "lsadump",
+        "procdump", "comsvcs.dll", "MiniDumpWriteDump", "nanodump",
+        "lsass.dmp", "Out-Minidump", "pypykatz", "lsassy",
+        "Invoke-Mimikatz", "DumpCreds")
+        or (ProcessCommandLine has "comsvcs" and ProcessCommandLine has "lsass")
+        or (ProcessCommandLine has "\\lsass")
+        or (FileName =~ "procdump.exe" and ProcessCommandLine has "lsass")
+    | project TimeGenerated, Signal = "🔑 Credential Access", DeviceName,
               Account = AccountName,
               InitiatingProcess = InitiatingProcessFileName,
               InitiatingProcessCmd = InitiatingProcessCommandLine,
               ChildProcess = FileName,
               SHA256,
-              Detail = strcat("Recovery sabotage: ", substring(CmdArgs, 0, 250))
+              Detail = strcat("Cred: ", substring(ProcessCommandLine, 0, 250))
 ),
 // ============================================================
-// 5. DISCOVERY - recon, categorized by target
+// TA0007 DISCOVERY -- T1087/T1069/T1558/T1082/T1016/T1018 recon
 // ============================================================
 (
     DeviceProcessEvents
     | where TimeGenerated {TimeRange}
     | where isempty(TargetDevice) or DeviceName has TargetDevice
-    | extend CmdArgs = replace_regex(ProcessCommandLine, @'(?i)^\s*"?[^"]*?\.exe"?', "")
     | extend ReconCategory = case(
-        CmdArgs has_any ("net group \"domain admins\"", "net group \"enterprise admins\"",
+        ProcessCommandLine has_any (
+            "net group \"domain admins\"", "net group \"enterprise admins\"",
             "net group \"domain controllers\"", "net localgroup administrators",
             "net accounts /domain", "dsquery", "dsget", "adfind",
             "Get-ADUser", "Get-ADGroup", "Get-ADComputer", "Get-ADDomain",
-            "Get-DomainUser", "Get-NetUser", "Get-NetGroup", "Get-NetComputer",
+            "Get-DomainUser", "Get-NetUser", "Get-NetGroup",
             "Get-DomainController", "Get-NetDomainController"),
             "🔴 AD Enumeration",
-        CmdArgs has_any ("SharpHound", "Invoke-BloodHound", "-CollectionMethod",
+        ProcessCommandLine has_any (
+            "SharpHound", "Invoke-BloodHound", "-CollectionMethod",
             "bloodhound", "azurehound", "Get-DomainTrust", "Get-ForestTrust"),
             "🔴 BloodHound/AD Mapping",
-        CmdArgs has_any ("setspn -q", "setspn -l", "Get-DomainSPNTicket",
-            "Invoke-Kerberoast", "GetUserSPNs", "Rubeus kerberoast", "kerberoast"),
+        ProcessCommandLine has_any (
+            "setspn -q", "setspn -l", "Get-DomainSPNTicket",
+            "Invoke-Kerberoast", "GetUserSPNs", "Rubeus kerberoast"),
             "🔴 Kerberos/SPN Recon",
-        CmdArgs has_any ("az account", "az ad", "aws sts get-caller-identity",
+        ProcessCommandLine has_any (
+            "az account", "az ad", "aws sts get-caller-identity",
             "aws iam", "gcloud auth", "Get-AzureADUser", "Get-MgUser",
-            "Connect-AzAccount", "Get-AzRoleAssignment", "kubectl get secrets"),
+            "Connect-AzAccount", "Get-AzRoleAssignment",
+            "kubectl get secrets"),
             "🔴 Cloud/Identity Recon",
-        CmdArgs has_any ("net view", "net share", "net session", "net use",
-            "Get-NetShare", "Get-NetSession", "Find-DomainShare", "Invoke-ShareFinder",
-            "PsLoggedon", "quser", "qwinsta", "query session", "query user"),
+        ProcessCommandLine has_any (
+            "net view", "net share", "net session", "net use",
+            "Get-NetShare", "Get-NetSession", "Find-DomainShare",
+            "PsLoggedon", "quser", "qwinsta", "query session"),
             "🟠 Share/Session Discovery",
-        CmdArgs has_any ("net user", "net localgroup", "whoami /priv", "whoami /groups",
-            "whoami /all", "Get-LocalUser", "Get-LocalGroupMember", "cmdkey /list",
-            "wmic useraccount", "wmic group"),
+        ProcessCommandLine has_any (
+            "net user", "net localgroup", "whoami /priv", "whoami /groups",
+            "whoami /all", "Get-LocalUser", "Get-LocalGroupMember",
+            "cmdkey /list", "wmic useraccount"),
             "🟠 Local Account/Priv Enum",
-        (CmdArgs has_any ("Get-MpComputerStatus", "Get-MpPreference", "sc query windefend",
-            "sc queryex", "tasklist /svc", "fltmc", "driverquery", "Get-Service")
-            and CmdArgs has_any ("defender", "crowdstrike", "sentinel", "carbonblack",
-                "cylance", "sophos", "mcafee", "symantec", "falcon")),
+        (ProcessCommandLine has_any (
+            "Get-MpComputerStatus", "Get-MpPreference", "sc query windefend",
+            "tasklist /svc", "fltmc", "driverquery")
+            and ProcessCommandLine has_any (
+                "defender", "crowdstrike", "sentinel",
+                "cylance", "sophos", "mcafee", "falcon")),
             "🟠 Security Product Discovery",
-        CmdArgs has_any ("ipconfig", "arp -a", "route print", "netstat",
+        ProcessCommandLine has_any (
+            "ipconfig", "arp -a", "arp /a", "route print", "netstat",
             "nltest /dclist", "nltest /domain_trusts", "nbtstat",
-            "Get-NetNeighbor", "Resolve-DnsName", "ping -n", "for /l"),
+            "Resolve-DnsName", "ping -n"),
             "🟡 Network Discovery",
-        CmdArgs has_any ("systeminfo", "hostname", "wmic os", "wmic computersystem",
-            "Get-ComputerInfo", "Get-WmiObject Win32_", "Get-CimInstance",
+        ProcessCommandLine has_any (
+            "systeminfo", "hostname", "wmic os", "wmic computersystem",
+            "Get-ComputerInfo", "Get-WmiObject Win32_",
             "reg query", "wmic qfe", "wmic product"),
             "🟡 Host/System Enum",
-        "🟡 Other Recon"
-    )
-    | where ReconCategory != "🟡 Other Recon"
-        or FileName in~ ("whoami.exe", "net.exe", "net1.exe", "nltest.exe",
+        FileName in~ (
+            "whoami.exe", "net.exe", "net1.exe", "nltest.exe",
             "systeminfo.exe", "ipconfig.exe", "arp.exe", "route.exe",
-            "quser.exe", "tasklist.exe", "netstat.exe", "wmic.exe", "dsquery.exe")
+            "quser.exe", "tasklist.exe", "netstat.exe", "wmic.exe",
+            "dsquery.exe"),
+            "🟡 Recon Binary",
+        ""
+    )
+    | where isnotempty(ReconCategory)
     | project TimeGenerated, Signal = "🔍 Discovery/Recon", DeviceName,
               Account = AccountName,
               InitiatingProcess = InitiatingProcessFileName,
               InitiatingProcessCmd = InitiatingProcessCommandLine,
               ChildProcess = FileName,
               SHA256,
-              Detail = strcat(ReconCategory, ": ", FileName, " ", substring(ProcessCommandLine, 0, 200))
+              Detail = strcat(ReconCategory, ": ", FileName, " ",
+                             substring(ProcessCommandLine, 0, 200))
 ),
 // ============================================================
-// 6. LATERAL MOVEMENT - remote exec, PsExec, WMI, admin shares
+// TA0008 LATERAL MOVEMENT -- T1021 remote exec, PsExec, WMI, WinRM
 // ============================================================
 (
     DeviceProcessEvents
     | where TimeGenerated {TimeRange}
     | where isempty(TargetDevice) or DeviceName has TargetDevice
-    | extend CmdArgs = replace_regex(ProcessCommandLine, @'(?i)^\s*"?[^"]*?\.exe"?', "")
-    | where FileName in~ ("psexec.exe", "psexesvc.exe", "paexec.exe", "wmic.exe")
-        or CmdArgs has_any ("Invoke-Command", "Enter-PSSession", "New-PSSession",
-            "wmic /node", "\\admin$", "\\c$", "Invoke-WMIMethod", "Invoke-SMBExec")
+    | where FileName in~ ("psexec.exe", "psexesvc.exe", "paexec.exe")
+        or ProcessCommandLine has_any (
+            "Invoke-Command", "Enter-PSSession", "New-PSSession",
+            "wmic /node", "\\admin$", "\\c$",
+            "Invoke-WMIMethod", "Invoke-SMBExec",
+            "winrs -r", "winrs.exe")
     | project TimeGenerated, Signal = "↔️ Lateral Movement", DeviceName,
               Account = AccountName,
               InitiatingProcess = InitiatingProcessFileName,
               InitiatingProcessCmd = InitiatingProcessCommandLine,
               ChildProcess = FileName,
               SHA256,
-              Detail = strcat("Lateral: ", FileName, " ", substring(CmdArgs, 0, 200))
+              Detail = strcat("Lateral: ", FileName, " ",
+                             substring(ProcessCommandLine, 0, 200))
 ),
 // ============================================================
-// 7. NETWORK EGRESS - LOLBins reaching public infrastructure
+// TA0011 COMMAND & CONTROL -- T1059/T1071 backdoor / reverse shell
+// ============================================================
+(
+    DeviceProcessEvents
+    | where TimeGenerated {TimeRange}
+    | where isempty(TargetDevice) or DeviceName has TargetDevice
+    | where ProcessCommandLine has_any (
+            "nc.exe -e", "ncat", "-e cmd", "-e /bin/sh", "-e powershell",
+            "socat", "/bin/bash -i", "bash -i", "sh -i",
+            "Invoke-PowerShellTcp", "Nishang", "powercat",
+            "Invoke-Shellcode", "Invoke-ReverseShell")
+        or (ProcessCommandLine has "System.Net.Sockets.TCPClient"
+            and ProcessCommandLine has_any ("GetStream", "sendback", "iex"))
+        or (ProcessCommandLine has "\\\\.\\pipe\\"
+            and ProcessCommandLine has_any ("cmd", "powershell"))
+        or (ProcessCommandLine has_any ("python", "python3")
+            and ProcessCommandLine has_any (
+                "socket.socket", "SOCK_STREAM", "pty.spawn"))
+        or (InitiatingProcessFileName in~ (
+                "w3wp.exe", "httpd.exe", "nginx.exe",
+                "tomcat.exe", "php-cgi.exe")
+            and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe"))
+    | project TimeGenerated, Signal = "🐚 Backdoor / Reverse Shell", DeviceName,
+              Account = AccountName,
+              InitiatingProcess = InitiatingProcessFileName,
+              InitiatingProcessCmd = InitiatingProcessCommandLine,
+              ChildProcess = FileName,
+              SHA256,
+              Detail = strcat("Shell: ", FileName, " ",
+                             substring(ProcessCommandLine, 0, 250))
+),
+// ============================================================
+// TA0011 COMMAND & CONTROL -- T1071.001 LOLBin network egress
 // ============================================================
 (
     DeviceNetworkEvents
     | where TimeGenerated {TimeRange}
     | where isempty(TargetDevice) or DeviceName has TargetDevice
-    | where InitiatingProcessFileName in~ ("powershell.exe", "pwsh.exe", "cmd.exe",
-        "rundll32.exe", "regsvr32.exe", "mshta.exe", "wscript.exe", "cscript.exe", "certutil.exe")
+    | where InitiatingProcessFileName in~ (
+        "powershell.exe", "pwsh.exe", "cmd.exe",
+        "rundll32.exe", "regsvr32.exe", "mshta.exe",
+        "wscript.exe", "cscript.exe", "certutil.exe")
     | where RemoteIPType == "Public"
-    | where not(tolower(RemoteUrl) matches regex
-        @"^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|localhost)")
-    // Connectivity probes are not egress
     | where not(InitiatingProcessCommandLine contains "OpenRead"
         and InitiatingProcessCommandLine contains "CanRead")
-    | where not(tolower(RemoteUrl) has_any ("google.com", "gstatic.com",
-        "msftconnecttest.com", "msftncsi.com"))
+    | where not(tolower(RemoteUrl) has_any (
+        "google.com", "gstatic.com", "msftconnecttest.com",
+        "msftncsi.com", "microsoft.com", "windowsupdate.com",
+        "azure.com", "azureedge.net"))
     | project TimeGenerated, Signal = "🌐 LOLBin Network Egress", DeviceName,
               Account = InitiatingProcessAccountName,
               InitiatingProcess = InitiatingProcessFileName,
@@ -261,50 +386,7 @@ union isfuzzy=true
                              coalesce(RemoteUrl, RemoteIP), ":", RemotePort)
 ),
 // ============================================================
-// 8. NATIVE DEFENDER DETECTIONS on this host
-// ============================================================
-(
-    DeviceEvents
-    | where TimeGenerated {TimeRange}
-    | where isempty(TargetDevice) or DeviceName has TargetDevice
-    | where ActionType has_any ("AntivirusDetection", "AntivirusReport",
-        "SecurityLogCleared", "AsrLsassCredentialTheftBlocked",
-        "ExploitGuardNetworkProtectionBlocked", "SmartScreenUrlWarning")
-    | project TimeGenerated, Signal = "🛡️ Defender Detection", DeviceName,
-              Account = InitiatingProcessAccountName,
-              InitiatingProcess = InitiatingProcessFileName,
-              InitiatingProcessCmd = InitiatingProcessCommandLine,
-              ChildProcess = FileName,
-              SHA256,
-              Detail = strcat(ActionType, " | ", substring(tostring(AdditionalFields), 0, 200))
-),
-// ============================================================
-// 9. BACKDOOR / REVERSE SHELL - interactive C2 channels
-// ============================================================
-(
-    DeviceProcessEvents
-    | where TimeGenerated {TimeRange}
-    | where isempty(TargetDevice) or DeviceName has TargetDevice
-    | extend CmdArgs = replace_regex(ProcessCommandLine, @'(?i)^\s*"?[^"]*?\.exe"?', "")
-    | where CmdArgs has_any ("nc.exe -e", "ncat", "-e cmd", "-e /bin/sh", "-e powershell",
-            "socat", "/bin/bash -i", "bash -i", "sh -i")
-        or (CmdArgs has "System.Net.Sockets.TCPClient" and CmdArgs has_any ("GetStream", "sendback", "iex"))
-        or CmdArgs has_any ("Invoke-PowerShellTcp", "Nishang", "powercat",
-            "Invoke-Shellcode", "Invoke-ReverseShell")
-        or (CmdArgs has "\\\\.\\pipe\\" and CmdArgs has_any ("cmd", "powershell"))
-        or (CmdArgs has_any ("python", "python3") and CmdArgs has_any ("socket.socket", "SOCK_STREAM", "pty.spawn"))
-        or (InitiatingProcessFileName in~ ("w3wp.exe", "httpd.exe", "nginx.exe", "tomcat.exe", "php-cgi.exe")
-            and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe"))
-    | project TimeGenerated, Signal = "🐚 Backdoor / Reverse Shell", DeviceName,
-              Account = AccountName,
-              InitiatingProcess = InitiatingProcessFileName,
-              InitiatingProcessCmd = InitiatingProcessCommandLine,
-              ChildProcess = FileName,
-              SHA256,
-              Detail = strcat("Shell: ", FileName, " ", substring(CmdArgs, 0, 250))
-),
-// ============================================================
-// 10. UNAUTHORIZED REMOTE TOOLS / TUNNELS
+// TA0011 COMMAND & CONTROL -- T1219/T1572 remote tools & tunnels
 // ============================================================
 (
     DeviceProcessEvents
@@ -319,21 +401,70 @@ union isfuzzy=true
         "RemoteUtilities.exe", "rutserv.exe", "Radmin.exe",
         "winvnc.exe", "tvnserver.exe", "uvnc_service.exe", "vncviewer.exe",
         "ngrok.exe", "frpc.exe", "chisel.exe", "cloudflared.exe", "plink.exe")
-    | where FileName !in~ ("TeamViewer.exe", "TeamViewer_Service.exe", "tv_w32.exe",
+    | where FileName !in~ (
+        "TeamViewer.exe", "TeamViewer_Service.exe", "tv_w32.exe",
         "tv_x64.exe", "BeyondTrust.exe", "bomgar-scc.exe", "raserver.exe")
-    | extend IsTunneler = FileName in~ ("ngrok.exe", "frpc.exe", "chisel.exe", "cloudflared.exe", "plink.exe")
-    | project TimeGenerated, Signal = iff(IsTunneler, "🕳️ Tunneling Tool", "🖥️ Unauthorized Remote Tool"),
+    | extend IsTunneler = FileName in~ (
+        "ngrok.exe", "frpc.exe", "chisel.exe", "cloudflared.exe", "plink.exe")
+    | project TimeGenerated,
+              Signal = iff(IsTunneler, "🕳️ Tunneling Tool",
+                                       "🖥️ Unauthorized Remote Tool"),
               DeviceName, Account = AccountName,
               InitiatingProcess = InitiatingProcessFileName,
               InitiatingProcessCmd = InitiatingProcessCommandLine,
               ChildProcess = FileName,
               SHA256,
-              Detail = strcat(iff(IsTunneler, "Tunnel: ", "RAT: "), FileName, " ", substring(ProcessCommandLine, 0, 200))
+              Detail = strcat(iff(IsTunneler, "Tunnel: ", "RAT: "),
+                             FileName, " ", substring(ProcessCommandLine, 0, 200))
+),
+// ============================================================
+// TA0040 IMPACT -- T1490 ransomware prep / recovery sabotage
+// ============================================================
+(
+    DeviceProcessEvents
+    | where TimeGenerated {TimeRange}
+    | where isempty(TargetDevice) or DeviceName has TargetDevice
+    | where ProcessCommandLine has_any (
+        "vssadmin delete shadows", "wmic shadowcopy delete",
+        "Win32_ShadowCopy", "bcdedit /set recoveryenabled no",
+        "bcdedit /set safeboot", "wbadmin delete catalog",
+        "vssadmin resize shadowstorage", "diskshadow",
+        "del /s /f /q", "cipher /w")
+    | project TimeGenerated, Signal = "💥 Ransomware Prep", DeviceName,
+              Account = AccountName,
+              InitiatingProcess = InitiatingProcessFileName,
+              InitiatingProcessCmd = InitiatingProcessCommandLine,
+              ChildProcess = FileName,
+              SHA256,
+              Detail = strcat("Recovery sabotage: ",
+                             substring(ProcessCommandLine, 0, 250))
+),
+// ============================================================
+// CROSS-CUTTING -- native Defender detections on this host
+// ============================================================
+(
+    DeviceEvents
+    | where TimeGenerated {TimeRange}
+    | where isempty(TargetDevice) or DeviceName has TargetDevice
+    | where ActionType has_any (
+        "AntivirusDetection", "AntivirusReport",
+        "SecurityLogCleared", "AsrLsassCredentialTheftBlocked",
+        "ExploitGuardNetworkProtectionBlocked", "SmartScreenUrlWarning",
+        "TamperingAttempt", "AntivirusDetectionNotBlocked")
+    | project TimeGenerated, Signal = "🛡️ Defender Detection", DeviceName,
+              Account = InitiatingProcessAccountName,
+              InitiatingProcess = InitiatingProcessFileName,
+              InitiatingProcessCmd = InitiatingProcessCommandLine,
+              ChildProcess = FileName,
+              SHA256,
+              Detail = strcat(ActionType, " | ",
+                             substring(tostring(AdditionalFields), 0, 200))
 ),
 // --- Schema pin keeps union column order and types stable ---
 (
-    datatable(TimeGenerated:datetime, Signal:string, DeviceName:string, Account:string,
-              InitiatingProcess:string, InitiatingProcessCmd:string, ChildProcess:string,
+    datatable(TimeGenerated:datetime, Signal:string, DeviceName:string,
+              Account:string, InitiatingProcess:string,
+              InitiatingProcessCmd:string, ChildProcess:string,
               SHA256:string, Detail:string)[]
 )
 // ============================================================
@@ -342,10 +473,13 @@ union isfuzzy=true
 | extend IsHardSignal = Signal has_any (HardSignalKeywords)
 | extend IsBenignParent =
     InitiatingProcess in~ (BenignParents)
-    or InitiatingProcessCmd contains "\\Microsoft Intune Management Extension\\Content\\DetectionScripts\\"
+    or InitiatingProcessCmd contains
+        "\\Microsoft Intune Management Extension\\Content\\DetectionScripts\\"
     or (InitiatingProcessCmd contains "-ExecutionPolicy AllSigned"
         and InitiatingProcessCmd contains "SessionState.LanguageMode")
     or InitiatingProcessCmd contains "--msedgewebview"
+    or InitiatingProcessCmd contains "hpatchmonTask"
+    or InitiatingProcessCmd contains "RunCommandExtension"
     or (InitiatingProcess =~ "svchost.exe"
         and (InitiatingProcessCmd contains "-s DPS"
              or InitiatingProcessCmd contains "-s SysMain"
