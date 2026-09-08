@@ -109,5 +109,5 @@ Both approaches are correct for their stage. Carrying IR's exclusion lists into 
 ---
 
 ## 📊 Visualization of the Dashboard
-Here is an example of the 
-![alt text](image.png)
+Here is an example of the (Device Compromise Triage)[Sentinel Workbooks 📊/Incident Response Workbook/Device Compromise Triage/Device Compromise Triage.md] playbook.
+![alt text](Sentinel Workbooks 📊/Incident Response Workbook/Device Compromise Triage/Image/image.png)
