@@ -92,3 +92,8 @@ Query-backed rather than free text — a typo returns an empty result set that l
 
 ---
 
+## 📊 Visualization of the Dashboard
+
+Here's an example of the [Device Compromise Triage](Incident%20Response%20Workbook/Device%20Compromise%20Triage/Device%20Compromise%20Triage.md) playbook in action:
+
+![Device Compromise Triage dashboard](Incident%20Response%20Workbook/Device%20Compromise%20Triage/Image/image.png)
