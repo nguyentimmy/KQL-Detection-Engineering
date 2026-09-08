@@ -43,7 +43,7 @@ Every event gets a `RiskScore` (0–10) and a Severity label — 🔴 Critical /
 ![alt text](image.png)
 
 ---
-## KQL
+## 🔍 KQL
 ```kql
 // ============================================================
 // DEVICE COMPROMISE TRIAGE v4.0 - Workbook (Parameterized, Risk-Scored)
