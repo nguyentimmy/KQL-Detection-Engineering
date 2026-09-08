@@ -96,4 +96,4 @@ Query-backed rather than free text — a typo returns an empty result set that l
 
 Here's an example of the [Device Compromise Triage](Sentinel Workbooks 📊/Incident Response Workbook/Device Compromise Triage/Device Compromise Triage.md) playbook in action:
 
-![Device Compromise Triage dashboard](Incident Response Workbook/Device Compromise Triage/Image/image.png)
+![Device Compromise Triage dashboard](Sentinel Workbooks 📊/Incident Response Workbook/Device Compromise Triage/Image/image.png)
