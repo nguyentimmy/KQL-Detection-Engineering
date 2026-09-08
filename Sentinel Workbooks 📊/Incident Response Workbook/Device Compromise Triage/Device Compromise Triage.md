@@ -39,6 +39,7 @@ Every event gets a `RiskScore` (0–10) and a Severity label — 🔴 Critical /
 | **Remote Access** | Unauthorized RATs and tunneling tools (ngrok, chisel, frp, cloudflared) |
 | **Defender Detections** | Native AV, ASR, Exploit Guard, and SmartScreen hits on the host |
 
+![alt text](image.png)
 ---
 ## KQL
 ```kql
