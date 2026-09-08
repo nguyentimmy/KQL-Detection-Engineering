@@ -18,14 +18,14 @@ The filtering difference is deliberate. IR hides benign activity so the timeline
 
 | # | Panel | Reconstructs |
 | --- | --- | --- |
-| 1 | 🌳 **Process Execution & Lineage** | Full ancestry — walk backward from a payload to the initial click |
-| 2 | 📁 **File System Activity** | Creates, modifies, renames, deletes, plus download provenance |
-| 3 | 🌐 **Network & DNS** | Every connection and query, with the initiating process |
-| 4 | 👤 **Logon Sessions** | Attribution — which account was present when it happened |
-| 5 | 🔧 **Persistence & Autoruns** | Autorun keys, tasks, services, startup folder, WMI, drivers |
-| 6 | 📧 **Email Delivery & Click** | Initial access — patient zero |
-| 7 | 🧬 **DLL / Image Loads** | Sideloading, unsigned modules from user-writable paths |
-| 8 | 🗂️ **Registry Modifications** | What the attacker *changed* about the host |
+| 1 | **Process Execution & Lineage** | Full ancestry — walk backward from a payload to the initial click |
+| 2 | **File System Activity** | Creates, modifies, renames, deletes, plus download provenance |
+| 3 | **Network & DNS** | Every connection and query, with the initiating process |
+| 4 | **Logon Sessions** | Attribution — which account was present when it happened |
+| 5 | **Persistence & Autoruns** | Autorun keys, tasks, services, startup folder, WMI, drivers |
+| 6 | **Email Delivery & Click** | Initial access — patient zero |
+| 7 | **DLL / Image Loads** | Sideloading, unsigned modules from user-writable paths |
+| 8 | **Registry Modifications** | What the attacker *changed* about the host |
 
 ---
 
@@ -41,10 +41,4 @@ Panels are separate query steps sharing one parameter set, so you can scroll bet
 
 ---
 
-## 🧭 Usage
 
-Start with a **one-to-two-hour window** around the event IR identified, and widen only as needed. These panels return everything — a multi-day window on a busy host will hit the row cap.
-
-Sorted **ascending** throughout, because forensic timelines read forward.
-
-Panels 5, 7, and 8 hide routine volume when no device is selected and show everything once you scope to one — `DeviceImageLoadEvents` and `DeviceRegistryEvents` log enormous amounts of normal activity, so fleet-wide they surface only anomalies.

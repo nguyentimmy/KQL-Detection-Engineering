@@ -92,14 +92,3 @@ Query-backed rather than free text — a typo returns an empty result set that l
 
 ---
 
-## 🧠 Design notes
-
-**Grouped by technique, not by table.** The timeline reads as attacker activity rather than raw telemetry, with `Signal` as the triage axis.
-
-**Weak indicators can't fire alone.** Execution-policy switches, temp paths, hidden windows, and generic recon are used by nearly every legitimate automation tool. They add context to a row that already matched something meaningful.
-
-**Suppression has a hard-signal bypass.** Known-benign parents are filtered post-union to keep the timeline readable, but credential dumping, ransomware prep, backdoor shells, and defense evasion **always surface** — a binary masquerading as a trusted agent still appears.
-
-**Fingerprint, don't allowlist by name.** Every exclusion pins both a command-line shape *and* its parent process or path. Allowlisting a filename alone creates a blind spot malware can occupy by adopting that name.
-
-**Schema pinned across the union.** An empty `datatable` with the explicit output schema keeps column order stable when a section returns no rows. Declare numeric columns `long`, not `int` — KQL integer literals are `long`, and a mismatch silently splits the column.
