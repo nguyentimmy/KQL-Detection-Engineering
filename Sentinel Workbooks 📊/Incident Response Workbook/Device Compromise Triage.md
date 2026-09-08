@@ -1,25 +1,30 @@
-
-# Device Compromise Triage
+# 🛡️ Device Compromise Triage
 
 **On-demand post-compromise investigation for a single endpoint.**
 
-Parameterized Microsoft Sentinel / Defender XDR queries for post-compromise investigation.
+Parameterized Microsoft Sentinel / Defender XDR queries for post-compromise investigation, risk-scored and severity-ranked.
 
-Traditionally, working a suspect device or account means opening a dozen separate queries across process, registry, network, identity, and mailbox telemetry — then lining up timestamps by hand. During an active incident, that setup work is the bottleneck, not the analysis.
+Traditionally, working a suspect device or account means opening a dozen separate queries across process, registry, network, identity, and mailbox telemetry — then lining up timestamps by hand, and eyeballing which hits actually matter. During an active incident, that setup work is the bottleneck, not the analysis.
 
-These consolidate it into a single parameterized view. Pick an entity, pick a time range, get a chronological timeline in seconds. No query editing, no copy-pasting between tabs, no reconstructing the sequence manually.
+These consolidate it into a single parameterized view. Pick an entity, pick a time range, get a chronological timeline in seconds — sorted by risk, not just time, so the most dangerous activity surfaces first.
 
 ---
 
-## Why this exists
+## 🎯 Why this exists
 
-Investigating a suspect endpoint normally means running a dozen separate hunts — process, registry, network, and file telemetry — then correlating the results by hand. During an active incident that setup work is the bottleneck, not the analysis. This collapses ten detection categories into one parameterized view.
+Investigating a suspect endpoint normally means running a dozen separate hunts — process, registry, network, and file telemetry — then correlating the results by hand and manually deciding what's worth chasing first. During an active incident that setup work is the bottleneck, not the analysis. This collapses ten detection categories into one parameterized, risk-ranked view.
 
 Use it when a device surfaces in an alert, appears on the endpoint dashboard, or is named by a user under investigation.
 
 ---
 
-## What it searches for
+## ⚖️ Risk Score
+
+Every event gets a `RiskScore` (0–10) and a Severity label — 🔴 Critical / 🟠 High / 🟡 Medium / ⚪ Low — based on how dangerous the technique is, with a boost for high-confidence recon and hard signals. Results sort worst-first by default, so the top of the table is always what needs attention first.
+
+---
+
+## 🔍 What it searches for
 
 | Category | Signals |
 | --- | --- |
