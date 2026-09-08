@@ -108,8 +108,6 @@ Both approaches are correct for their stage. Carrying IR's exclusion lists into 
 
 ---
 
-## 📌 Notes
-
-Exclusion lists across all three are environment-specific and appear as placeholders. Populate internal domains, sanctioned tooling, management paths, and known-benign agents before deploying.
-
-These are monitoring and investigation aids, not detection rules — they surface activity for human review. Pair the high-fidelity techniques with scheduled analytics rules for anything that should page someone.
+## 📊 Visualization of the Dashboard
+Here is an example of the 
+![alt text](image.png)
