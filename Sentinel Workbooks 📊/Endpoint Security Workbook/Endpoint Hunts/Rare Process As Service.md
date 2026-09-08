@@ -10,7 +10,7 @@ Service creation is a durable persistence method that survives reboots and runs 
 
 **Severity:** suspicious path + external network = High. Either alone = Medium.
 
-```
+```kql
 // ============================================================
 // Rare Service Processes - services.exe Uncommon Children
 // ============================================================
